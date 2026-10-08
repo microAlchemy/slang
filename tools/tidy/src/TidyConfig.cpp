@@ -75,6 +75,7 @@ TidyConfig::TidyConfig() {
     synthesisChecks.emplace("UndrivenRange", CheckOptions());
     synthesisChecks.emplace("LoopBeforeResetCheck", CheckOptions());
     synthesisChecks.emplace("StructFieldsInSameProcess", CheckOptions());
+    synthesisChecks.emplace("ChildCalledBeforeStartCheck", CheckOptions());
     checkKinds.insert({slang::TidyKind::Synthesis, synthesisChecks});
 }
 
