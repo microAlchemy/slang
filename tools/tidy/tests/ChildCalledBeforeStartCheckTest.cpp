@@ -1180,6 +1180,3 @@ endmodule
 )");
     CHECK_FALSE(result);
 }
-
-
-//AI used for test case generation, not for writing the lint.
