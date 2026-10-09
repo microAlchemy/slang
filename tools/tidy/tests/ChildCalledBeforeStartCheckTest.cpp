@@ -290,7 +290,7 @@ endmodule
     CHECK(result);
 }
 
-TEST_CASE("ChildCalledBeforeStartCheck: wait() scheduling point before call -negative ") {
+TEST_CASE("ChildCalledBeforeStartCheck: wait() scheduling point before call -positive ") {
     auto result = runCheckTest("ChildCalledBeforeStartCheck", R"(
 module wait_clean;
     task child_task(); endtask
@@ -305,7 +305,7 @@ module wait_clean;
     end
 endmodule
 )");
-    CHECK(result);
+    CHECK_FALSE(result);
 }
 
 TEST_CASE("ChildCalledBeforeStartCheck: wait fork scheduling point before call -negative ") {
@@ -556,7 +556,7 @@ module semaphore_clean;
     end
 endmodule
 )");
-    CHECK(result);
+    CHECK_FALSE(result);
 }
 
 TEST_CASE("ChildCalledBeforeStartCheck: mailbox get() is a scheduling point -negative ") {
@@ -596,7 +596,6 @@ module wait_literal_true_warn;
     end
 endmodule
 )");
-    // Expected: warning. Deterministic false-negative case.
     CHECK_FALSE(result);
 }
 
@@ -617,7 +616,6 @@ module semaphore_put_warn;
     end
 endmodule
 )");
-    // Expected: warning. Depends on slang's built-in method representation.
     CHECK_FALSE(result);
 }
 
@@ -639,7 +637,6 @@ module if_zero_no_warn;
     end
 endmodule
 )");
-    // Expected: no warning. Current implementation may warn.
     CHECK(result);
 }
 
@@ -659,7 +656,6 @@ module if_constant_false_no_warn;
     end
 endmodule
 )");
-    // Expected: no warning.
     CHECK(result);
 }
 
@@ -680,7 +676,6 @@ module unreachable_else_no_warn;
     end
 endmodule
 )");
-    // Expected: no warning.
     CHECK(result);
 }
 
@@ -699,7 +694,6 @@ module if_true_warn;
     end
 endmodule
 )");
-    // Expected: warning.
     CHECK_FALSE(result);
 }
 
@@ -721,7 +715,6 @@ module nested_parent_call_warn;
     end
 endmodule
 )");
-    // Expected: warning. This should already work via MatchingCallFinder.
     CHECK_FALSE(result);
 }
 
@@ -741,7 +734,6 @@ module conditional_parent_call_warn;
     end
 endmodule
 )");
-    // Expected: warning. Current implementation likely catches this.
     CHECK_FALSE(result);
 }
 
@@ -762,7 +754,6 @@ module nested_argument_warn;
     end
 endmodule
 )");
-    // Expected: warning. MatchingCallFinder should descend into arguments.
     CHECK_FALSE(result);
 }
 
@@ -782,8 +773,6 @@ module nested_matching_calls_warn;
     end
 endmodule
 )");
-    // Expected: at least one warning.
-    // Does not verify which call was diagnosed.
     CHECK_FALSE(result);
 }
 
@@ -802,8 +791,6 @@ module multiple_parent_calls_warn;
     end
 endmodule
 )");
-    // Expected: at least one warning.
-    // Current implementation intentionally reports only the first.
     CHECK_FALSE(result);
 }
 
@@ -826,7 +813,6 @@ module same_object_warn;
     end
 endmodule
 )");
-    // Expected: warning.
     CHECK_FALSE(result);
 }
 
@@ -945,17 +931,255 @@ module nested_call_before_delay_warn;
     end
 endmodule
 )");
-    // Expected: warning.
     CHECK_FALSE(result);
 }
 
 
 
 
+TEST_CASE("ChildCalledBeforeStartCheck: unreachable call after return -negative") {
+    auto result = runCheckTest("ChildCalledBeforeStartCheck", R"(
+module return_before_call;
+    task child_task(); endtask
+    task parent_task();
+        fork child_task(); join_none
+        return;
+        child_task();
+    endtask
+endmodule
+)");
+    CHECK(result);
+}
+
+TEST_CASE("ChildCalledBeforeStartCheck: unreachable call after forever -negative") {
+    auto result = runCheckTest("ChildCalledBeforeStartCheck", R"(
+module forever_before_call;
+    task child_task(); endtask
+    initial begin
+        fork child_task(); join_none
+        forever begin
+            #1;
+        end
+        child_task();
+    end
+endmodule
+)");
+    CHECK(result);
+}
+
+TEST_CASE("ChildCalledBeforeStartCheck: repeat zero call unreachable -negative") {
+    auto result = runCheckTest("ChildCalledBeforeStartCheck", R"(
+module repeat_zero_call;
+    task child_task(); endtask
+    initial begin
+        fork child_task(); join_none
+        repeat (0) child_task();
+    end
+endmodule
+)");
+    CHECK(result);
+}
+
+TEST_CASE("ChildCalledBeforeStartCheck: call inside delay expression -positive") {
+    auto result = runCheckTest("ChildCalledBeforeStartCheck", R"(
+module call_in_delay;
+    function int child_func(); return 1; endfunction
+    initial begin
+        fork child_func(); join_none
+        #(child_func());
+    end
+endmodule
+)");
+    CHECK_FALSE(result);
+}
+
+TEST_CASE("ChildCalledBeforeStartCheck: call inside cycle delay -positive") {
+    auto result = runCheckTest("ChildCalledBeforeStartCheck", R"(
+module call_in_cycle_delay;
+    bit clk;
+    function int child_func(); return 1; endfunction
+    default clocking cb @(posedge clk);
+    endclocking
+    initial begin
+        fork child_func(); join_none
+        ##(child_func());
+    end
+endmodule
+)");
+    CHECK_FALSE(result);
+}
+
+TEST_CASE("ChildCalledBeforeStartCheck: parameter delay releases children -negative") {
+    auto result = runCheckTest("ChildCalledBeforeStartCheck", R"(
+module parameter_delay;
+    parameter int DELAY = 1;
+    task child_task(); endtask
+    initial begin
+        fork child_task(); join_none
+        #DELAY;
+        child_task();
+    end
+endmodule
+)");
+    CHECK(result);
+}
+
+TEST_CASE("ChildCalledBeforeStartCheck: arithmetic delay releases children -negative") {
+    auto result = runCheckTest("ChildCalledBeforeStartCheck", R"(
+module arithmetic_delay;
+    task child_task(); endtask
+    initial begin
+        fork child_task(); join_none
+        #(1 + 1);
+        child_task();
+    end
+endmodule
+)");
+    CHECK(result);
+}
+
+TEST_CASE("ChildCalledBeforeStartCheck: variable delay releases children -negative") {
+    auto result = runCheckTest("ChildCalledBeforeStartCheck", R"(
+module variable_delay;
+    task child_task(); endtask
+    int delay_amount = 1;
+    initial begin
+        fork child_task(); join_none
+        #(delay_amount);
+        child_task();
+    end
+endmodule
+)");
+    CHECK(result);
+}
+
+TEST_CASE("ChildCalledBeforeStartCheck: automatic declaration initializer -positive") {
+    auto result = runCheckTest("ChildCalledBeforeStartCheck", R"(
+module automatic_decl_initializer;
+    function int child_func(); return 1; endfunction
+    initial begin
+        fork
+            begin
+                automatic int x = child_func();
+            end
+        join_none
+        child_func();
+    end
+endmodule
+)");
+    CHECK_FALSE(result);
+}
+
+TEST_CASE("ChildCalledBeforeStartCheck: leading fork declaration -positive") {
+    auto result = runCheckTest("ChildCalledBeforeStartCheck", R"(
+module leading_fork_decl;
+    function int child_func(); return 1; endfunction
+    initial begin
+        fork
+            automatic int x = child_func();
+        join_none
+        child_func();
+    end
+endmodule
+)");
+    CHECK_FALSE(result);
+}
+
+TEST_CASE("ChildCalledBeforeStartCheck: child call in repeat zero -negative") {
+    auto result = runCheckTest("ChildCalledBeforeStartCheck", R"(
+module child_repeat_zero;
+    task child_task(); endtask
+    initial begin
+        fork
+            repeat (0) child_task();
+        join_none
+        child_task();
+    end
+endmodule
+)");
+    CHECK(result);
+}
+
+TEST_CASE("ChildCalledBeforeStartCheck: child call after return -negative") {
+    auto result = runCheckTest("ChildCalledBeforeStartCheck", R"(
+module child_after_return;
+    task child_task(); endtask
+    task parent_task();
+        fork
+            begin
+                return;
+                child_task();
+            end
+        join_none
+        child_task();
+    endtask
+endmodule
+)");
+    CHECK(result);
+}
+
+TEST_CASE("ChildCalledBeforeStartCheck: semaphore get available key -positive") {
+    auto result = runCheckTest("ChildCalledBeforeStartCheck", R"(
+module semaphore_available;
+    semaphore sem = new(1);
+    task child_task(); endtask
+    initial begin
+        fork child_task(); join_none
+        sem.get(1);
+        child_task();
+    end
+endmodule
+)");
+    CHECK_FALSE(result);
+}
+
+TEST_CASE("ChildCalledBeforeStartCheck: mailbox get with message -positive") {
+    auto result = runCheckTest("ChildCalledBeforeStartCheck", R"(
+module mailbox_available;
+    mailbox #(int) mbox = new();
+    task child_task(); endtask
+    initial begin
+        mbox.put(42);
+        fork child_task(); join_none
+        begin
+            int value;
+            mbox.get(value);
+        end
+        child_task();
+    end
+endmodule
+)");
+    CHECK_FALSE(result);
+}
+
+TEST_CASE("ChildCalledBeforeStartCheck: empty join_any does not suspend -positive") {
+    auto result = runCheckTest("ChildCalledBeforeStartCheck", R"(
+module empty_join_any;
+    task child_task(); endtask
+    initial begin
+        fork child_task(); join_none
+        fork join_any
+        child_task();
+    end
+endmodule
+)");
+    CHECK_FALSE(result);
+}
+
+TEST_CASE("ChildCalledBeforeStartCheck: wait true variable does not suspend -positive") {
+    auto result = runCheckTest("ChildCalledBeforeStartCheck", R"(
+module wait_true_variable;
+    task child_task(); endtask
+    bit ready = 1;
+    initial begin
+        fork child_task(); join_none
+        wait (ready);
+        child_task();
+    end
+endmodule
+)");
+    CHECK_FALSE(result);
+}
 
 
-
-
-
-
-
+//AI used for tests gen, not for lint.
