@@ -20,7 +20,6 @@ using namespace slang::analysis;
 namespace child_called_before_start_check {
 
 namespace {
-//1
 bool shouldVisitBranch(const ConditionalStatement& stmt, EvalContext& evalCtx,
                        bool goodBranch) {
     bool knownFalse = false;
@@ -42,7 +41,16 @@ bool shouldVisitBranch(const ConditionalStatement& stmt, EvalContext& evalCtx,
     }
     return goodBranch ? !knownFalse : (knownFalse || !knownTrue);
 }
-//case??
+
+bool skipsBody(const RepeatLoopStatement& loop, EvalContext& evalCtx) {
+    auto cv = loop.count.eval(evalCtx);
+    return cv.isInteger() && cv.integer() == 0;
+}
+
+bool endsSequence(const Statement& stmt) {
+    return stmt.kind == StatementKind::Return ||
+           stmt.kind == StatementKind::ForeverLoop;
+}
 
 struct CalledSubroutineCollector :
     public ASTVisitor<CalledSubroutineCollector, VisitFlags::AllCanonical> {
@@ -60,7 +68,6 @@ struct CalledSubroutineCollector :
         visitDefault(call);
     }
 
-    // 11
     void handle(const VariableDeclStatement& decl) {
         if (decl.symbol.lifetime == VariableLifetime::Static)
             return;
@@ -68,7 +75,12 @@ struct CalledSubroutineCollector :
             init->visit(*this);
     }
 
-    //4
+    void handle(const RepeatLoopStatement& loop) {
+        loop.count.visit(*this);
+        if (!skipsBody(loop, evalCtx))
+            loop.body.visit(*this);
+    }
+
     void handle(const ConditionalStatement& stmt) {
         for (const auto& cond : stmt.conditions) {
             cond.expr->visit(*this);
@@ -82,7 +94,6 @@ struct CalledSubroutineCollector :
     }
 };
 
-// 2
 struct MatchingCallFinder : public ASTVisitor<MatchingCallFinder, VisitFlags::AllCanonical> {
     const std::unordered_set<const SubroutineSymbol*>& targets;
     EvalContext& evalCtx;
@@ -107,8 +118,14 @@ struct MatchingCallFinder : public ASTVisitor<MatchingCallFinder, VisitFlags::Al
         visitDefault(call);
     }
 
+    void handle(const StatementList& list) {
+        for (const auto* stmt : list.list) {
+            stmt->visit(*this);
+            if (match || endsSequence(*stmt))
+                break;
+        }
+    }
 
-    // 10
     void handle(const BlockStatement& block) {
         if (match)
             return;
@@ -124,14 +141,22 @@ struct MatchingCallFinder : public ASTVisitor<MatchingCallFinder, VisitFlags::Al
             s->visit(*this);
         }
     }
-    // 11
+
     void handle(const VariableDeclStatement& decl) {
         if (match || decl.symbol.lifetime == VariableLifetime::Static)
             return;
         if (const auto* init = decl.symbol.getInitializer())
             init->visit(*this);
     }
-    // 11
+
+    void handle(const RepeatLoopStatement& loop) {
+        if (match)
+            return;
+        loop.count.visit(*this);
+        if (!match && !skipsBody(loop, evalCtx))
+            loop.body.visit(*this);
+    }
+
     void handle(const ConditionalStatement& stmt) {
         if (match)
             return;
@@ -151,7 +176,6 @@ bool ChildrenReleased(const Statement& stmt, MatchingCallFinder& preSuspension) 
     auto& evalCtx = preSuspension.evalCtx;
     switch (stmt.kind) {
         case StatementKind::WaitFork:
-            return true;
         case StatementKind::DisableFork:
             return true;
         case StatementKind::Block: {
@@ -160,40 +184,31 @@ bool ChildrenReleased(const Statement& stmt, MatchingCallFinder& preSuspension) 
                 block.blockKind != StatementBlockKind::JoinAny) {
                 return false;
             }
+            if (block.blockKind == StatementBlockKind::JoinAny &&
+                block.body.kind == StatementKind::List &&
+                block.body.as<StatementList>().list.empty()) {
+                return false;
+            }
             stmt.visit(preSuspension);
             return true;
         }
         case StatementKind::Wait: {
-            // 5
             const auto& waitStmt = stmt.as<WaitStatement>();
             auto cv = waitStmt.cond.eval(evalCtx);
-            if (cv && cv.isTrue())
-                return false;
             waitStmt.cond.visit(preSuspension);
-            return true;
+            return cv && cv.isFalse();
         }
         case StatementKind::Timed: {
             const auto& timing = stmt.as<TimedStatement>().timing;
             bool suspends = false;
             switch (timing.kind) {
-                case TimingControlKind::Delay: {
-                    // 6
-                    const auto& delay =
-                        timing.as<DelayControl>().expr.unwrapImplicitConversions();
-                    suspends = delay.kind == ExpressionKind::IntegerLiteral ||
-                               delay.kind == ExpressionKind::RealLiteral ||
-                               delay.kind == ExpressionKind::TimeLiteral ||
-                               delay.kind == ExpressionKind::UnbasedUnsizedIntegerLiteral;
-                    break;
-                }
+                case TimingControlKind::Delay:
                 case TimingControlKind::SignalEvent:
                 case TimingControlKind::EventList:
                 case TimingControlKind::ImplicitEvent:
-                    // 7
                     suspends = true;
                     break;
                 case TimingControlKind::CycleDelay: {
-                    //7
                     auto cv = timing.as<CycleDelayControl>().expr.eval(evalCtx);
                     if (cv.isInteger()) {
                         auto count = cv.integer().as<int64_t>();
@@ -210,7 +225,6 @@ bool ChildrenReleased(const Statement& stmt, MatchingCallFinder& preSuspension) 
             return true;
         }
         case StatementKind::RepeatLoop: {
-            // 7
             const auto& loop = stmt.as<RepeatLoopStatement>();
             auto cv = loop.count.eval(evalCtx);
             if (!cv.isInteger())
@@ -223,41 +237,6 @@ bool ChildrenReleased(const Statement& stmt, MatchingCallFinder& preSuspension) 
             loop.count.visit(preSuspension);
             return true;
         }
-        case StatementKind::ExpressionStatement: {
-            const auto& expr = stmt.as<ExpressionStatement>().expr;
-            if (expr.kind != ExpressionKind::Call)
-                return false;
-            const auto& call = expr.as<CallExpression>();
-            if (call.subroutine.index() != 0)
-                return false;
-            const auto* sub = std::get<0>(call.subroutine);
-            if (!sub)
-                return false;
-            //1
-            if (sub->subroutineKind != SubroutineKind::Task)
-                return false;
-            const auto* classScope = sub->getParentScope();
-            if (!classScope)
-                return false;
-            const auto& classSym = classScope->asSymbol();
-            if (classSym.kind != SymbolKind::ClassType)
-                return false;
-            //8
-            const auto* pkgScope = classSym.getParentScope();
-            if (!pkgScope ||
-                &pkgScope->asSymbol() != &classScope->getCompilation().getStdPackage()) {
-                return false;
-            }
-            bool blocking = false;
-            if (classSym.name == "semaphore")
-                blocking = sub->name == "get";
-            else if (classSym.name == "mailbox")
-                blocking = sub->name == "get" || sub->name == "peek";
-            if (!blocking)
-                return false;
-            stmt.visit(preSuspension);
-            return true;
-        }
         default:
             return false;
     }
@@ -266,7 +245,7 @@ bool ChildrenReleased(const Statement& stmt, MatchingCallFinder& preSuspension) 
 
 struct MainVisitor : public TidyVisitor, ASTVisitor<MainVisitor, VisitFlags::AllCanonical> {
     EvalContext& evalCtx;
-    
+
     MainVisitor(Diagnostics& diagnostics, EvalContext& evalCtx) :
         TidyVisitor(diagnostics), evalCtx(evalCtx) {}
 
@@ -278,7 +257,6 @@ struct MainVisitor : public TidyVisitor, ASTVisitor<MainVisitor, VisitFlags::All
 
     void checkFork(const BlockStatement& fork,
                    std::span<const Statement* const> following) {
-        //10
         CalledSubroutineCollector forkCallCollector(evalCtx);
         if (fork.body.kind == StatementKind::List) {
             bool inLeadingDecls = true;
@@ -303,7 +281,7 @@ struct MainVisitor : public TidyVisitor, ASTVisitor<MainVisitor, VisitFlags::All
                 reportMatch(*finder.match);
                 break;
             }
-            if (released)
+            if (released || endsSequence(*stmt))
                 break;
         }
     }
@@ -322,7 +300,6 @@ struct MainVisitor : public TidyVisitor, ASTVisitor<MainVisitor, VisitFlags::All
         visitDefault(stmtList);
     }
 
-    //4
     void handle(const ConditionalStatement& stmt) {
         if (shouldVisitBranch(stmt, evalCtx, true))
             stmt.ifTrue.visit(*this);
@@ -348,7 +325,7 @@ public:
         root.visit(visitor);
         return diagnostics.empty();
     }
-    
+
     DiagCode diagCode() const override {
         return diag::ChildCalledBeforeStart;
     }
