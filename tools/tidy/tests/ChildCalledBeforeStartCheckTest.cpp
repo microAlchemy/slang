@@ -1182,4 +1182,4 @@ endmodule
 }
 
 
-//AI used for tests gen, not for lint.
+//AI used for test case generation, not for writing the lint.
