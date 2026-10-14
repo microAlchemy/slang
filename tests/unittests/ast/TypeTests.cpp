@@ -1777,6 +1777,27 @@ endmodule
     CHECK(diags[0].code == diag::TypeRefHierarchical);
 }
 
+TEST_CASE("Type reference through an interface port") {
+    auto tree = SyntaxTree::fromText(R"(
+interface I;
+    logic [17:1] foo;
+endinterface
+
+module m(I i);
+    var type(i.foo) asdf = 1;
+endmodule
+
+module top;
+    I i();
+    m u(i);
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+    NO_COMPILATION_ERRORS;
+}
+
 TEST_CASE("Virtual interface parameter resolution regress GH #510") {
     auto tree = SyntaxTree::fromText(R"(
 interface I #(A=1);
@@ -2851,6 +2872,42 @@ endmodule
     CHECK(diags[0].code == diag::PackedMemberHasInitializer);
 }
 
+TEST_CASE("Unpacked struct member initializer must be constant") {
+    auto tree = SyntaxTree::fromText(R"(
+module m;
+    int v = 3;
+    struct { int x = v; } s;
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 1);
+    CHECK(diags[0].code == diag::ConstEvalNonConstVariable);
+}
+
+TEST_CASE("Unpacked struct member initializer is its default value") {
+    auto tree = SyntaxTree::fromText(R"(
+module m;
+    typedef struct { int x = 5; int y; } s_t;
+    function automatic int f();
+        s_t s;
+        return s.x + s.y;
+    endfunction
+    localparam int P = f();
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+    NO_COMPILATION_ERRORS;
+
+    auto& p = compilation.getRoot().lookupName<ParameterSymbol>("m.P");
+    CHECK(p.getValue().integer() == 5);
+}
+
 TEST_CASE("Packed union members must have the same width") {
     auto tree = SyntaxTree::fromText(R"(
 module m;
@@ -2976,4 +3033,44 @@ endmodule
     auto& diags = compilation.getAllDiagnostics();
     REQUIRE(diags.size() == 1);
     CHECK(diags[0].code == diag::ExpectedNetDelay);
+}
+
+TEST_CASE("Enum values declared in constructs with nested member lists") {
+    auto tree = SyntaxTree::fromText(R"(
+class B #(type T = int); endclass
+
+module m;
+    // Generate block condition
+    if ($bits(enum {GA, GB}) == 32) begin : g int y; end
+    localparam int x1 = GB;
+
+    // Class extends clause
+    class C extends B #(enum {CA, CB});
+        int x;
+    endclass
+    localparam int x2 = CB;
+
+    initial begin
+        int z;
+
+        // Statement expressions, with and without nested blocks
+        z = $bits(enum {SA, SB});
+        z = SA;
+        if ($bits(enum {TA, TB}) == 32) begin int y; end
+        z = TB;
+
+        // Randsequence productions with ports and code blocks
+        randsequence(main)
+            main : first second third;
+            enum {PA, PB} first(int x = 1) : { return PA; };
+            enum {QA, QB} second : { int y; y = 1; return QA; };
+            third : { int k = PB; int l = QB; };
+        endsequence
+    end
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+    NO_COMPILATION_ERRORS;
 }
