@@ -1180,3 +1180,118 @@ endmodule
 )");
     CHECK_FALSE(result);
 }
+
+TEST_CASE("ChildCalledBeforeStartCheck: nested disable fork -negative") {
+    auto result = runCheckTest("ChildCalledBeforeStartCheck", R"(
+module nested_disable_fork;
+    task child_task(); endtask
+    initial begin
+        fork child_task(); join_none
+        begin
+            disable fork;
+            child_task();
+        end
+    end
+endmodule
+)");
+    CHECK(result);
+}
+
+TEST_CASE("ChildCalledBeforeStartCheck: nested delay before call -negative") {
+    auto result = runCheckTest("ChildCalledBeforeStartCheck", R"(
+module nested_delay_before_call;
+    task child_task(); endtask
+    initial begin
+        fork child_task(); join_none
+        begin
+            #0;
+            child_task();
+        end
+    end
+endmodule
+)");
+    CHECK(result);
+}
+
+//Known false negatives/positives requiring CFG/interprocedural.
+
+TEST_CASE("ChildCalledBeforeStartCheck: fork inside begin then outer call -positive") {
+    auto result = runCheckTest("ChildCalledBeforeStartCheck", R"(
+module fork_inside_begin;
+    task child_task(); endtask
+    initial begin
+        begin
+            fork child_task(); join_none
+        end
+        child_task();
+    end
+endmodule
+)");
+    //CHECK_FALSE(result);
+    CHECK(result);
+}
+
+TEST_CASE("ChildCalledBeforeStartCheck: indirect matching call -positive") {
+    auto result = runCheckTest("ChildCalledBeforeStartCheck", R"(
+module indirect_call;
+    task child_task(); endtask
+    task wrapper(); child_task(); endtask
+    initial begin
+        fork child_task(); join_none
+        wrapper();
+    end
+endmodule
+)");
+    //CHECK_FALSE(result);
+    CHECK(result);
+}
+
+TEST_CASE("ChildCalledBeforeStartCheck: nested wait before call -negative") {
+    auto result = runCheckTest("ChildCalledBeforeStartCheck", R"(
+module nested_wait_before_call;
+    task child_task(); endtask
+    bit ready = 0;
+    initial begin
+        fork child_task(); join_none
+        begin
+            wait (ready);
+            child_task();
+        end
+    end
+endmodule
+)");
+    //CHECK_FALSE(result);
+    CHECK(result);
+}
+
+TEST_CASE("ChildCalledBeforeStartCheck: fork inside repeat then parent call -positive") {
+    auto result = runCheckTest("ChildCalledBeforeStartCheck", R"(
+module fork_inside_repeat;
+    task child_task(); endtask
+    initial begin
+        repeat (1) begin
+            fork child_task(); join_none
+        end
+        child_task();
+    end
+endmodule
+)");
+    //CHECK_FALSE(result);
+    CHECK(result);
+}
+
+TEST_CASE("ChildCalledBeforeStartCheck: fork inside if then parent call -positive") {
+    auto result = runCheckTest("ChildCalledBeforeStartCheck", R"(
+module fork_inside_if;
+    task child_task(); endtask
+    initial begin
+        if (1) begin
+            fork child_task(); join_none
+        end
+        child_task();
+    end
+endmodule
+)");
+    //CHECK_FALSE(result);
+    CHECK(result);
+}
