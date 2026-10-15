@@ -494,6 +494,10 @@ SyntaxList<TMember> Parser::parseMemberList(TokenKind endKind, Token& endToken,
     bool errored = false;
     bool anyLocalModules = false;
 
+    // Save off any pending preview node from an enclosing construct
+    // so that it doesn't get attached to one of our members.
+    auto savedPN = std::exchange(previewNode, nullptr);
+
     while (true) {
         auto kind = peek().kind;
         if (kind == TokenKind::EndOfFile || kind == endKind)
@@ -528,6 +532,7 @@ SyntaxList<TMember> Parser::parseMemberList(TokenKind endKind, Token& endToken,
     if (anyLocalModules)
         moduleDeclStack.pop_back();
 
+    previewNode = savedPN;
     endToken = expect(endKind);
     return SyntaxList<TMember>(alloc, members);
 }
@@ -2667,8 +2672,10 @@ CheckerDeclarationSyntax& Parser::parseCheckerDeclaration(AttrList attributes) {
     auto blockName = parseNamedBlockClause();
     checkBlockNames(name, blockName);
 
-    return factory.checkerDeclaration(attributes, keyword, name, portList, semi, members, end,
-                                      blockName);
+    auto& result = factory.checkerDeclaration(attributes, keyword, name, portList, semi, members,
+                                              end, blockName);
+    meta.checkerDecls.push_back(&result);
+    return result;
 }
 
 Token Parser::parseEdgeKeyword() {
@@ -2941,7 +2948,9 @@ CheckerInstantiationSyntax& Parser::parseCheckerInstantiation(AttrList attribute
                                                diag::ExpectedHierarchicalInstantiation,
                                                [this] { return &parseHierarchicalInstance(); });
 
-    return factory.checkerInstantiation(attributes, type, parameters, {alloc, items}, semi);
+    auto& result = factory.checkerInstantiation(attributes, type, parameters, {alloc, items}, semi);
+    meta.checkerInstances.push_back(&result);
+    return result;
 }
 
 HierarchicalInstanceSyntax& Parser::parseHierarchicalInstance() {

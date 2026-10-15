@@ -113,7 +113,8 @@ struct Expression::HierarchicalVisitor {
     void visit(const T& expr) {
         if constexpr (std::is_base_of_v<Expression, T>) {
             if (expr.kind == ExpressionKind::HierarchicalValue) {
-                any = true;
+                if (!expr.template as<HierarchicalValueExpression>().ref.isViaIfacePort())
+                    any = true;
             }
             else if constexpr (HasVisitExprs<T, HierarchicalVisitor>) {
                 expr.visitExprs(*this);
@@ -474,11 +475,17 @@ std::tuple<const Expression*, const Type*> Expression::bindImplicitParam(
 
     Expression& expr = create(comp, rhs, exprContext, extraFlags);
     const Type* lhsType = expr.type;
+
+    // Unsized integer literals infer a width of at least 32 bits, except for
+    // unbased unsized literals which are 1 bit when self-determined [5.7.1].
+    const bool isUnsized = expr.isUnsizedInteger() &&
+                           expr.kind != ExpressionKind::UnbasedUnsizedIntegerLiteral;
+
     if (it.signing) {
         // If signing is provided, the result is always integral but we infer the width.
         // If the type is non-integral or unsized, infer a width of 32.
         bitwidth_t bits = lhsType->getBitWidth();
-        if (!lhsType->isIntegral() || expr.isUnsizedInteger())
+        if (!lhsType->isIntegral() || isUnsized)
             bits = 32;
 
         bitmask<IntegralFlags> flags = IntegralFlags::FourState;
@@ -492,7 +499,7 @@ std::tuple<const Expression*, const Type*> Expression::bindImplicitParam(
         // If integral, infer using rules mentioned above. Otherwise just take the type.
         if (lhsType->isIntegral()) {
             bitwidth_t bits = lhsType->getBitWidth();
-            if (expr.isUnsizedInteger())
+            if (isUnsized)
                 bits = std::max(bits, 32u);
 
             // Keep the signed flag but force four state.
@@ -1151,6 +1158,21 @@ Expression& Expression::bindLookupResult(Compilation& comp, LookupResult& result
         }
     }
 
+    // An upward name can resolve to a different symbol in each instance, so the
+    // containing instance can't share a cached body. Value expressions note this
+    // themselves; a subroutine can also be found upward by its simple name.
+    auto noteIfUpward = [&](const Expression& target) {
+        if (result.upwardCount == 0)
+            return;
+
+        auto ref = comp.emplace<HierarchicalReference>(
+            HierarchicalReference::fromLookup(comp, result));
+        ref->target = symbol;
+        ref->upwardCount = result.upwardCount;
+        ref->expr = &target;
+        comp.noteUpwardReference(*context.scope, *ref);
+    };
+
     Expression* expr;
     switch (symbol->kind) {
         case SymbolKind::Subroutine: {
@@ -1170,6 +1192,7 @@ Expression& Expression::bindLookupResult(Compilation& comp, LookupResult& result
                 comp.noteHierarchicalAssignment(*ref);
             }
 
+            noteIfUpward(*expr);
             break;
         }
         case SymbolKind::Sequence:
@@ -1188,6 +1211,8 @@ Expression& Expression::bindLookupResult(Compilation& comp, LookupResult& result
                 SourceRange callRange = localInvoke ? localInvoke->sourceRange() : result.nameRange;
                 context.addDiag(diag::LetHierarchical, callRange);
             }
+
+            noteIfUpward(*expr);
             break;
         }
         case SymbolKind::AssertionPort:
