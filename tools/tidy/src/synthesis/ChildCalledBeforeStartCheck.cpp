@@ -8,8 +8,9 @@
 
 #include <optional>
 #include <span>
-#include <string_view>
+#include <string>
 #include <unordered_set>
+#include <variant>
 
 #include "slang/ast/Compilation.h"
 #include "slang/ast/EvalContext.h"
@@ -21,7 +22,7 @@ namespace child_called_before_start_check {
 
 namespace {
 bool shouldVisitBranch(const ConditionalStatement& stmt, EvalContext& evalCtx,
-                       bool goodBranch) {
+                    bool goodBranch) {
     bool knownFalse = false;
     bool knownTrue = true;
     for (const auto& cond : stmt.conditions) {
@@ -42,15 +43,15 @@ bool shouldVisitBranch(const ConditionalStatement& stmt, EvalContext& evalCtx,
     return goodBranch ? !knownFalse : (knownFalse || !knownTrue);
 }
 
-bool skipsBody(const RepeatLoopStatement& loop, EvalContext& evalCtx) {
-    auto cv = loop.count.eval(evalCtx);
-    return cv.isInteger() && cv.integer() == 0;
-}
-
 bool endsSequence(const Statement& stmt) {
     return stmt.kind == StatementKind::Return ||
            stmt.kind == StatementKind::ForeverLoop;
 }
+
+struct MatchingCallFinder;
+
+bool releasesChildren(const Statement& stmt,
+                      MatchingCallFinder& preSuspension);
 
 struct CalledSubroutineCollector :
     public ASTVisitor<CalledSubroutineCollector, VisitFlags::AllCanonical> {
@@ -77,7 +78,8 @@ struct CalledSubroutineCollector :
 
     void handle(const RepeatLoopStatement& loop) {
         loop.count.visit(*this);
-        if (!skipsBody(loop, evalCtx))
+        auto count = loop.count.eval(evalCtx);
+        if (!count.isInteger() || count.integer() != 0)
             loop.body.visit(*this);
     }
 
@@ -120,8 +122,10 @@ struct MatchingCallFinder : public ASTVisitor<MatchingCallFinder, VisitFlags::Al
 
     void handle(const StatementList& list) {
         for (const auto* stmt : list.list) {
-            stmt->visit(*this);
-            if (match || endsSequence(*stmt))
+            bool released = releasesChildren(*stmt, *this);
+            if (!released)
+                stmt->visit(*this);
+            if (match || released || endsSequence(*stmt))
                 break;
         }
     }
@@ -153,7 +157,8 @@ struct MatchingCallFinder : public ASTVisitor<MatchingCallFinder, VisitFlags::Al
         if (match)
             return;
         loop.count.visit(*this);
-        if (!match && !skipsBody(loop, evalCtx))
+        auto count = loop.count.eval(evalCtx);
+        if (!match && (!count.isInteger() || count.integer() != 0))
             loop.body.visit(*this);
     }
 
@@ -172,7 +177,8 @@ struct MatchingCallFinder : public ASTVisitor<MatchingCallFinder, VisitFlags::Al
     }
 };
 
-bool ChildrenReleased(const Statement& stmt, MatchingCallFinder& preSuspension) {
+bool releasesChildren(const Statement& stmt,
+                      MatchingCallFinder& preSuspension) {
     auto& evalCtx = preSuspension.evalCtx;
     switch (stmt.kind) {
         case StatementKind::WaitFork:
@@ -232,7 +238,7 @@ bool ChildrenReleased(const Statement& stmt, MatchingCallFinder& preSuspension) 
             auto count = cv.integer().as<int64_t>();
             if (!count || *count <= 0)
                 return false;
-            if (!ChildrenReleased(loop.body, preSuspension))
+            if (!releasesChildren(loop.body, preSuspension))
                 return false;
             loop.count.visit(preSuspension);
             return true;
@@ -257,32 +263,32 @@ struct MainVisitor : public TidyVisitor, ASTVisitor<MainVisitor, VisitFlags::All
 
     void checkFork(const BlockStatement& fork,
                    std::span<const Statement* const> following) {
-        CalledSubroutineCollector forkCallCollector(evalCtx);
+        CalledSubroutineCollector collector(evalCtx);
         if (fork.body.kind == StatementKind::List) {
             bool inLeadingDecls = true;
             for (const auto* s : fork.body.as<StatementList>().list) {
                 if (inLeadingDecls && s->kind == StatementKind::VariableDeclaration)
                     continue;
                 inLeadingDecls = false;
-                s->visit(forkCallCollector);
+                s->visit(collector);
             }
         }
         else {
-            fork.body.visit(forkCallCollector);
+            fork.body.visit(collector);
         }
-        if (forkCallCollector.callees.empty())
+        if (collector.callees.empty())
             return;
         for (const auto* stmt : following) {
-            MatchingCallFinder finder(forkCallCollector.callees, evalCtx);
-            const bool released = ChildrenReleased(*stmt, finder);
+            MatchingCallFinder finder(collector.callees, evalCtx);
+            bool released = releasesChildren(*stmt, finder);
             if (!released)
                 stmt->visit(finder);
             if (finder.match) {
                 reportMatch(*finder.match);
-                break;
+                return;
             }
             if (released || endsSequence(*stmt))
-                break;
+                return;
         }
     }
 
@@ -295,7 +301,7 @@ struct MainVisitor : public TidyVisitor, ASTVisitor<MainVisitor, VisitFlags::All
             if (forkJoin.blockKind != StatementBlockKind::JoinNone)
                 continue;
             checkFork(forkJoin, std::span<const Statement* const>(
-                                    stmts.data() + i + 1, stmts.size() - i - 1));
+                                 stmts.data() + i + 1, stmts.size() - i - 1));
         }
         visitDefault(stmtList);
     }
@@ -315,7 +321,7 @@ using namespace child_called_before_start_check;
 class ChildCalledBeforeStartCheck : public TidyCheck {
 public:
     explicit ChildCalledBeforeStartCheck(TidyKind kind,
-                                         std::optional<slang::DiagnosticSeverity> severity) :
+        std::optional<slang::DiagnosticSeverity> severity) :
         TidyCheck(kind, severity) {}
 
     bool check(const RootSymbol& root, const AnalysisManager&) override {
@@ -348,18 +354,18 @@ public:
                "begun execution. Calling the same subroutine from the parent before yielding "
                "can therefore violate code that relies on the child call occurring first.\n\n" +
                fmt::format(fmt::emphasis::italic, "// BAD: child not yet started\n"
-                                                  "fork\n"
-                                                  "    child_task();\n"
-                                                  "join_none\n"
+                           "fork\n"
+                           "    child_task();\n"
+                           "join_none\n"
                                                   "child_task(); // warning: child may not have "
                                                   "started\n\n") +
                "Insert a scheduling point to suppress:\n\n" +
                fmt::format(fmt::emphasis::italic, "// GOOD: child has had a chance to start\n"
-                                                  "fork\n"
-                                                  "    child_task();\n"
-                                                  "join_none\n"
-                                                  "#0;\n"
-                                                  "child_task(); // fine\n");
+                           "fork\n"
+                           "    child_task();\n"
+                           "join_none\n"
+                           "#0;\n"
+                           "child_task(); // fine\n");
     }
 
     std::string shortDescription() const override {
