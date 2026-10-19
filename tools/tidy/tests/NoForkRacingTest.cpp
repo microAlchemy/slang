@@ -78,7 +78,7 @@ endmodule
     CHECK_FALSE(result);
 }
 
-// FORK VARIANTS
+ FORK VARIANTS
 
 TEST_CASE("NoForkRacing: join_any -positive") {
     auto result = runCheckTest("NoForkRacing", R"(
@@ -138,7 +138,7 @@ endmodule
     CHECK(result);
 }
 
-// NESTED FORKS
+ NESTED FORKS
 
 TEST_CASE("NoForkRacing: nested fork versus outer sibling -positive") {
     auto result = runCheckTest("NoForkRacing", R"(
@@ -239,7 +239,7 @@ endmodule
     CHECK_FALSE(result);
 }
 
-// PACKED SELECTIONS
+ PACKED SELECTIONS
 
 TEST_CASE("NoForkRacing: same packed bit -positive") {
     auto result = runCheckTest("NoForkRacing", R"(
@@ -367,7 +367,7 @@ endmodule
     CHECK(result);
 }
 
-// UNPACKED ARRAYS
+ UNPACKED ARRAYS
 
 TEST_CASE("NoForkRacing: same unpacked element -positive") {
     auto result = runCheckTest("NoForkRacing", R"(
@@ -439,7 +439,7 @@ endmodule
     CHECK_FALSE(result);
 }
 
-// MIXED PACKED AND UNPACKED SELECTIONS
+ MIXED PACKED AND UNPACKED SELECTIONS
 
 TEST_CASE("NoForkRacing: same element disjoint slices -negative") {
     auto result = runCheckTest("NoForkRacing", R"(
@@ -483,7 +483,7 @@ endmodule
     CHECK(result);
 }
 
-// DYNAMIC INDEXES
+ DYNAMIC INDEXES
 
 TEST_CASE("NoForkRacing: same dynamic index -positive") {
     auto result = runCheckTest("NoForkRacing", R"(
@@ -517,7 +517,7 @@ endmodule
 }
 
 
-// STRUCT MEMBERS
+ STRUCT MEMBERS
 
 TEST_CASE("NoForkRacing: same struct member -positive") {
     auto result = runCheckTest("NoForkRacing", R"(
@@ -619,7 +619,7 @@ endmodule
     CHECK(result);
 }
 
-// ASSIGNMENT OPERATOR
+ ASSIGNMENT OPERATOR
 
 TEST_CASE("NoForkRacing: compound assignments -positive") {
     auto result = runCheckTest("NoForkRacing", R"(
@@ -692,7 +692,7 @@ endmodule
     CHECK_FALSE(result);
 }
 
-// CONCATENATION LVALUES
+ CONCATENATION LVALUES
 
 TEST_CASE("NoForkRacing: concatenation overlap -positive") {
     auto result = runCheckTest("NoForkRacing", R"(
@@ -736,7 +736,7 @@ endmodule
     CHECK_FALSE(result);
 }
 
-// TASK ARGUMENT
+ TASK ARGUMENT
 
 TEST_CASE("NoForkRacing: ref argument versus assignment -positive") {
     auto result = runCheckTest("NoForkRacing", R"(
@@ -884,7 +884,7 @@ endmodule
     CHECK(result);
 }
 
-// CLASS MEMBERS
+ CLASS MEMBERS
 
 TEST_CASE("NoForkRacing: explicit this -positive") {
     auto result = runCheckTest("NoForkRacing", R"(
@@ -990,7 +990,7 @@ endmodule
     CHECK_FALSE(result);
 }
 
-// VARIABLE SCOPE
+ VARIABLE SCOPE
 
 TEST_CASE("NoForkRacing: distinct child locals -negative") {
     auto result = runCheckTest("NoForkRacing", R"(
@@ -1043,7 +1043,7 @@ endmodule
     CHECK_FALSE(result);
 }
 
-// CONTROL FLOW
+ CONTROL FLOW
 
 TEST_CASE("NoForkRacing: conditional writes -positive") {
     auto result = runCheckTest("NoForkRacing", R"(
@@ -1119,7 +1119,7 @@ endmodule
     CHECK(result);
 }
 
-// KNOWN LIMITATIONS
+ KNOWN LIMITATIONS
 
 TEST_CASE("NoForkRacing: handle aliasing -known limitation") {
     auto result = runCheckTest("NoForkRacing", R"(
@@ -1141,7 +1141,7 @@ module m;
     end
 endmodule
 )");
-    // No alias analysis: different root symbols.
+     No alias analysis: different root symbols.
     CHECK(result);
 }
 
@@ -1160,7 +1160,6 @@ module m;
     join
 endmodule
 )");
-    // No interprocedural side-effect analysis.
     CHECK(result);
 }
 
@@ -1189,11 +1188,8 @@ module m;
     end
 endmodule
 )");
-    // Synchronization is not analyzed, so a warning is expected.
     CHECK_FALSE(result);
 }
-
-//THE FOLLOWING FAIL:
 
 TEST_CASE("NoForkRacing: dynamic indices overlapping slices -negative") {
     auto result = runCheckTest("NoForkRacing", R"(
@@ -1371,8 +1367,6 @@ endmodule
     CHECK_FALSE(result);
 }
 
-// BY-REF SYSTEM METHOD ARGS (isArgByRef path)
-
 TEST_CASE("NoForkRacing: assoc array iterator writes index -positive") {
     auto result = runCheckTest("NoForkRacing", R"(
 module m;
@@ -1416,8 +1410,6 @@ module m;
     join
 endmodule
 )");
-    // LRM 9.3.2: block-item declarations run in the parent before any
-    // child process is spawned, so this is ordered, not a race.
     CHECK(result);
 }
 
