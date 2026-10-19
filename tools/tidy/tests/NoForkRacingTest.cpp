@@ -1521,7 +1521,7 @@ endmodule
 }
 
 
-TEST_CASE("NoForkRacing: mixed this form, disjoint elements -design choice") {
+TEST_CASE("NoForkRacing: mixed this form, disjoint elements") {
     auto result = runCheckTest("NoForkRacing", R"(
 module m;
     class C;
@@ -1536,5 +1536,5 @@ module m;
     endclass
 endmodule
 )");
-    CHECK_FALSE(result); // conservative; flip to CHECK if you make it precise
+    CHECK(result); 
 }
