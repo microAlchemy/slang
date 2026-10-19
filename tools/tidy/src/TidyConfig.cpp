@@ -76,6 +76,7 @@ TidyConfig::TidyConfig() {
     synthesisChecks.emplace("LoopBeforeResetCheck", CheckOptions());
     synthesisChecks.emplace("StructFieldsInSameProcess", CheckOptions());
     synthesisChecks.emplace("ChildCalledBeforeStartCheck", CheckOptions());
+    synthesisChecks.emplace("NoForkRacing", CheckOptions());
     checkKinds.insert({slang::TidyKind::Synthesis, synthesisChecks});
 }
 
