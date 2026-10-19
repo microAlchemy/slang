@@ -434,7 +434,8 @@ endmodule
 -Wcase-default
 A case statement is missing a 'default' label. This is not necessarily problematic,
 but some coding standards mandate that all case statements include a 'default' so
-this warning can be used to enforce that.
+this warning can be used to enforce that. This also applies to case property
+expressions, which succeed vacuously if no item matches and there is no default.
 ```
 module m;
     enum {A, B} e;
@@ -463,7 +464,8 @@ endmodule
 -Wcase-enum
 A case statement with an enum type condition does not include items
 that cover every enumerand. Note that this warning will not be
-issued if there is a 'default' label.
+issued if there is a 'default' label. This also applies to case generate
+constructs, case property expressions, and randsequence case productions.
 ```
 module m;
     enum {A, B} e;
@@ -478,7 +480,8 @@ endmodule
 -Wcase-enum-explicit
 A case statement with an enum type condition does not include items
 that cover every enumerand, regardless of whether there is a default
-label or not.
+label or not. This also applies to case generate constructs, case property
+expressions, and randsequence case productions.
 ```
 module m;
     enum {A, B} e;
@@ -494,7 +497,8 @@ endmodule
 -Wcase-dup
 A case statement contains more than one item with the same value.
 Case items are evaluated and selected in order and so the second
-one will never be matched.
+one will never be matched. This also applies to case generate constructs,
+case property expressions, and randsequence case productions.
 ```
 module m;
     int i;
@@ -543,7 +547,9 @@ endmodule
 -Wcase-not-wildcard
 A normal case statement has items with integer literals that contain X or Z bits.
 These bits don't count as wildcards, so the designer may have meant for this to
-be a 'casex' or 'casez' statement instead.
+be a 'casex' or 'casez' statement instead. This also applies to case generate
+constructs, case property expressions, and randsequence case productions, which
+have no wildcard form at all.
 ```
 module m;
     logic [2:0] a;
@@ -1537,6 +1543,105 @@ package m;
 endpackage;
 ```
 
+-Wimplicit-net
+An undeclared identifier was used in a context where `` `default_nettype `` is in effect,
+causing an implicit net to be created. This is legal, but the implicit net may be the
+result of a typo or a missing declaration. Unlike -Wunused-implicit-net, this warning
+fires regardless of whether the net is subsequently used, so it can catch typos that
+happen to be referenced more than once. Set `` `default_nettype none `` if you want such
+implicit nets to be an error instead.
+```
+module producer(output out); endmodule
+module consumer(input in); endmodule
+
+module top;
+    producer p (.out(sig));
+    consumer c (.in(sig));
+endmodule
+```
+
+-Wtautological-self-compare
+Warns about comparisons of an expression with itself, which always evaluate
+to the same result. Comparisons like `==`, `<=`, and `>=` on four-state
+values are not diagnosed since they evaluate to X when the value has
+unknown bits.
+```
+module m;
+    int a;
+    initial begin
+        if (a < a) begin end
+    end
+endmodule
+```
+
+-Wtautological-range-compare
+Warns about comparisons against a constant that lies outside the range of
+values the other side of the comparison can take on, which means the
+comparison always has the same result.
+```
+module m;
+    logic [3:0] a;
+    byte b;
+    initial begin
+        if (a == 20) begin end
+        if (b < 200) begin end
+    end
+endmodule
+```
+
+-Wtautological-limit-compare
+Warns about comparisons against a constant at the very limit of the range of
+values the other side of the comparison can take on, such that the comparison
+always has the same result. A common source of this is checking whether an
+unsigned value is greater than or equal to zero.
+```
+module m;
+    logic [3:0] a;
+    initial begin
+        for (logic [3:0] i = 15; i >= 0; i--) begin end
+        if (a <= 15) begin end
+    end
+endmodule
+```
+
+-Wtautological-bitwise-compare
+Warns about equality comparisons against the result of a bitwise AND or OR
+with a constant mask that make it impossible for the comparison to succeed.
+```
+module m;
+    logic [3:0] a;
+    initial begin
+        if ((a & 4'h4) == 4'h8) begin end
+        if ((a | 4'h4) != 4'h1) begin end
+    end
+endmodule
+```
+
+-Wtautological-overlap-compare
+Warns about logical combinations of comparisons of the same expression against
+constants that always evaluate to the same result.
+```
+module m;
+    int a;
+    initial begin
+        if (a < 5 && a > 10) begin end
+        if (a != 1 || a != 2) begin end
+    end
+endmodule
+```
+
+-Wtautological-negation-compare
+Warns about logical combinations of an expression and its own negation, which
+always evaluate to the same result.
+```
+module m;
+    logic a;
+    initial begin
+        if (a || !a) begin end
+    end
+endmodule
+```
+
 @category Compatibility
 
 -Wdpi-spec
@@ -2358,23 +2463,6 @@ module m(input i);
 endmodule
 ```
 
--Wimplicit-net
-An undeclared identifier was used in a context where `` `default_nettype `` is in effect,
-causing an implicit net to be created. This is legal, but the implicit net may be the
-result of a typo or a missing declaration. Unlike -Wunused-implicit-net, this warning
-fires regardless of whether the net is subsequently used, so it can catch typos that
-happen to be referenced more than once. Set `` `default_nettype none `` if you want such
-implicit nets to be an error instead.
-```
-module producer(output out); endmodule
-module consumer(input in); endmodule
-
-module top;
-    producer p (.out(sig));
-    consumer c (.in(sig));
-endmodule
-```
-
 -Wudp-coverage
 A user-defined primitive is edge sensitive but does not provide an output value
 for all possible edges of all inputs. This is not necessarily wrong; the default
@@ -2418,6 +2506,21 @@ to the $psprintf function, which is a synonym for $sformatf.
 ```
 module m;
     initial $psprintf("%d", 42);
+endmodule
+```
+
+-Wnonstandard-instance-array-query
+The LRM only defines array query functions (`$size`, `$left`, `$dimensions`, etc) for
+data types and data objects, and an array of instances (modules, interfaces, primitives,
+etc) is neither. Some tools accept it anyway, using the declared dimensions of the
+instance array, so the error can be downgraded for compatibility.
+```
+module leaf;
+endmodule
+
+module m;
+    leaf l[4]();
+    localparam int n = $size(l);
 endmodule
 ```
 
@@ -2933,88 +3036,6 @@ endmodule
 module parent;
     int value = 42;
     child c1();
-endmodule
-```
-
--Wtautological-self-compare
-Warns about comparisons of an expression with itself, which always evaluate
-to the same result. Comparisons like `==`, `<=`, and `>=` on four-state
-values are not diagnosed since they evaluate to X when the value has
-unknown bits.
-```
-module m;
-    int a;
-    initial begin
-        if (a < a) begin end
-    end
-endmodule
-```
-
--Wtautological-range-compare
-Warns about comparisons against a constant that lies outside the range of
-values the other side of the comparison can take on, which means the
-comparison always has the same result.
-```
-module m;
-    logic [3:0] a;
-    byte b;
-    initial begin
-        if (a == 20) begin end
-        if (b < 200) begin end
-    end
-endmodule
-```
-
--Wtautological-limit-compare
-Warns about comparisons against a constant at the very limit of the range of
-values the other side of the comparison can take on, such that the comparison
-always has the same result. A common source of this is checking whether an
-unsigned value is greater than or equal to zero.
-```
-module m;
-    logic [3:0] a;
-    initial begin
-        for (logic [3:0] i = 15; i >= 0; i--) begin end
-        if (a <= 15) begin end
-    end
-endmodule
-```
-
--Wtautological-bitwise-compare
-Warns about equality comparisons against the result of a bitwise AND or OR
-with a constant mask that make it impossible for the comparison to succeed.
-```
-module m;
-    logic [3:0] a;
-    initial begin
-        if ((a & 4'h4) == 4'h8) begin end
-        if ((a | 4'h4) != 4'h1) begin end
-    end
-endmodule
-```
-
--Wtautological-overlap-compare
-Warns about logical combinations of comparisons of the same expression against
-constants that always evaluate to the same result.
-```
-module m;
-    int a;
-    initial begin
-        if (a < 5 && a > 10) begin end
-        if (a != 1 || a != 2) begin end
-    end
-endmodule
-```
-
--Wtautological-negation-compare
-Warns about logical combinations of an expression and its own negation, which
-always evaluate to the same result.
-```
-module m;
-    logic a;
-    initial begin
-        if (a || !a) begin end
-    end
 endmodule
 ```
 
