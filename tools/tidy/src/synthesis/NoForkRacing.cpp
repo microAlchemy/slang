@@ -34,33 +34,32 @@ static bool isThisVar(const Symbol& sym) {
 
 // ValuePath roots `this.x` at the compiler-generated `this` variable, key it on property `x`, the same as an implicit `x`.
 struct Write {
-    ValuePath path;
+    const Expression* expr;
     const Symbol* key;
+    std::vector<const Expression*> sels;
 
-    explicit Write(const ValuePath& path) : path(path), key(path.rootSymbol()) {
-        if (!key || !isThisVar(*key))
-            return;
-
+    explicit Write(const ValuePath& path) : expr(path.fullExpr), key(path.rootSymbol()) {
+        bool viaThis = key && isThisVar(*key);
         for (auto& elem : path) {
+            if (elem.kind == ExpressionKind::NamedValue ||
+                elem.kind == ExpressionKind::HierarchicalValue)
+                break;
             auto access = elem.as_if<MemberAccessExpression>();
-            if (access && &access->value() == path.rootExpr) {
+            if (viaThis && access && &access->value() == path.rootExpr) {
                 key = &access->member;
                 break;
             }
+            sels.push_back(&elem);
         }
+        std::ranges::reverse(sels);
     }
 
-    // Policy: warn when overlap is provable (constant selections) or syntactically identical
-    // (same dynamic expression). Distinct dynamic indices are assumed to address different
-    // elements, and a constant against a dynamic index is not reported.
     bool mayOverlap(const Write& other, EvalContext& evalCtx) const {
         if (!key || key != other.key)
             return false;
 
-        auto a = selections();
-        auto b = other.selections();
-        for (size_t i = 0; i < std::min(a.size(), b.size()); ++i) {
-            if (!selectionsOverlap(*a[i], *b[i], evalCtx))
+        for (size_t i = 0; i < std::min(sels.size(), other.sels.size()); ++i) {
+            if (!selectionsOverlap(*sels[i], *other.sels[i], evalCtx))
                 return false;
         }
 
@@ -69,32 +68,23 @@ struct Write {
     }
 
 private:
-    // Selections below the key, outermost root first.
-    std::vector<const Expression*> selections() const {
-        std::vector<const Expression*> result;
-        for (auto& elem : path) {
-            if (elem.kind == ExpressionKind::NamedValue ||
-                elem.kind == ExpressionKind::HierarchicalValue)
-                break;
-
-            if (auto member = elem.as_if<MemberAccessExpression>(); member && &member->member == key)
-                break;
-
-            result.push_back(&elem);
-        }
-
-        std::ranges::reverse(result);
-        return result;
+    static const Expression& baseOf(const Expression& e) {
+        if (auto range = e.as_if<RangeSelectExpression>())
+            return range->left();
+        return e.as<ElementSelectExpression>().selector();
     }
 
     static bool selectionsOverlap(const Expression& a, const Expression& b, EvalContext& evalCtx) {
-        if (a.kind != b.kind)
-            return true;
+        if (a.kind == ExpressionKind::MemberAccess && b.kind == ExpressionKind::MemberAccess) {
+            return &a.as<MemberAccessExpression>().member ==
+                   &b.as<MemberAccessExpression>().member;
+        }
 
-        if (a.kind == ExpressionKind::MemberAccess)
-            return &a.as<MemberAccessExpression>().member == &b.as<MemberAccessExpression>().member;
-
-        if (a.kind != ExpressionKind::ElementSelect && a.kind != ExpressionKind::RangeSelect)
+        auto isSelect = [](const Expression& e) {
+            return e.kind == ExpressionKind::ElementSelect ||
+                   e.kind == ExpressionKind::RangeSelect;
+        };
+        if (!isSelect(a) || !isSelect(b))
             return true;
 
         auto left = a.evalSelector(evalCtx, /* enforceBounds */ true);
@@ -106,15 +96,9 @@ private:
         if (left || right)
             return false;
 
-        if (a.kind == ExpressionKind::ElementSelect) {
-            return a.as<ElementSelectExpression>().selector().isEquivalentTo(
-                b.as<ElementSelectExpression>().selector());
-        }
-
         // Indexed ranges from the same dynamic base always share that element,
         // whatever their widths.
-        return a.as<RangeSelectExpression>().left().isEquivalentTo(
-            b.as<RangeSelectExpression>().left());
+        return baseOf(a).isEquivalentTo(baseOf(b));
     }
 };
 
@@ -228,9 +212,8 @@ private:
                     }))
                     continue;
 
-                if (markEmitted(write.path.fullExpr->sourceRange.start())) {
-                    diags.add(diag::NoForkRacing, write.path.fullExpr->sourceRange)
-                        << write.key->name;
+                if (markEmitted(write.expr->sourceRange.start())) {
+                    diags.add(diag::NoForkRacing, write.expr->sourceRange) << write.key->name;
                 }
                 reported.insert(write.key);
             }
@@ -281,8 +264,7 @@ public:
                " Reports potential conflicts without proving simultaneous execution "
                "or accounting for synchronization. Analysis is intraprocedural and "
               "does not resolve handle aliases or writes inside called subroutines.\n\n" +
-              fmt::format(fmt::emphasis::italic,
-                          "module m;\n"
+               fmt::format(fmt::emphasis::italic, "module m;\n"
                                                   "    int count;\n"
                                                   "    initial fork\n"
                                                   "        count++;\n"
